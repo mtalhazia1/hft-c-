@@ -57,9 +57,9 @@ private:
     // Total trades executed counter
     std::atomic<int> totalTradesExecuted;
     
-    // Order books with smart pointers
-    std::map<Price, std::queue<std::unique_ptr<Order>>, std::greater<Price>> buyOrders;
-    std::map<Price, std::queue<std::unique_ptr<Order>>> sellOrders;
+    // Order books with shared pointers
+    std::map<Price, std::queue<std::shared_ptr<Order>>, std::greater<Price>> buyOrders;
+    std::map<Price, std::queue<std::shared_ptr<Order>>> sellOrders;
     
     // Use shared_ptr for order tracking
     std::unordered_map<OrderId, std::shared_ptr<Order>> orders;
@@ -68,7 +68,7 @@ private:
     std::mutex orderBookMutex;
     
     // Helper method to match orders
-    void matchOrders(std::unique_ptr<Order> newOrder);
+    void matchOrders(std::shared_ptr<Order> newOrder);
     
     // Helper method to log order book state
     void logOrderBookState();

@@ -52,7 +52,7 @@ Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::sha
     }
 
     // Try to match orders first
-    matchOrders(std::unique_ptr<Order>(new Order(*order)));
+    matchOrders(order);
 
     return Response(ResponseStatus::SUCCESS, "Order placed successfully", orderId);
 }
@@ -137,7 +137,7 @@ Response Engine::cancelOrder(OrderId orderId, std::shared_ptr<Client> client) {
     return Response(ResponseStatus::SUCCESS, "Order cancelled successfully");
 }
 
-void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
+void Engine::matchOrders(std::shared_ptr<Order> newOrder) {
     if (!newOrder) return;
 
     std::cout << "\nAttempting to match order: " << newOrder->orderId.value << std::endl;
@@ -160,7 +160,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
 
                 auto& queue = it->second;
                 while (!queue.empty() && newOrder->remainingAmount.value > 0) {
-                    auto sellOrder = std::move(queue.front());
+                    auto sellOrder = queue.front();
                     queue.pop();
                     
                     // Calculate trade amount
@@ -169,10 +169,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
                     Price tradePrice = sellOrder->price;
                     
                     // Store trade details for later execution
-                    tradesToExecute.emplace_back(
-                        std::make_shared<Order>(*newOrder),
-                        std::make_shared<Order>(*sellOrder),
-                        tradePrice, tradeAmount);
+                    tradesToExecute.emplace_back(newOrder, sellOrder, tradePrice, tradeAmount);
                     
                     // Update remaining amounts
                     newOrder->remainingAmount.value -= tradeAmount.value;
@@ -180,7 +177,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
                     
                     // If sell order still has remaining amount, push it back
                     if (sellOrder->remainingAmount.value > 0) {
-                        queue.push(std::move(sellOrder));
+                        queue.push(sellOrder);
                     }
                     
                     if (queue.empty()) {
@@ -201,7 +198,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
                 
                 auto& queue = it->second;
                 while (!queue.empty() && newOrder->remainingAmount.value > 0) {
-                    auto buyOrder = std::move(queue.front());
+                    auto buyOrder = queue.front();
                     queue.pop();
                     
                     // Calculate trade amount
@@ -210,10 +207,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
                     Price tradePrice = buyOrder->price;
                     
                     // Store trade details for later execution
-                    tradesToExecute.emplace_back(
-                        std::make_shared<Order>(*buyOrder),
-                        std::make_shared<Order>(*newOrder),
-                        tradePrice, tradeAmount);
+                    tradesToExecute.emplace_back(buyOrder, newOrder, tradePrice, tradeAmount);
                     
                     // Update remaining amounts
                     newOrder->remainingAmount.value -= tradeAmount.value;
@@ -221,7 +215,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
                     
                     // If buy order still has remaining amount, push it back
                     if (buyOrder->remainingAmount.value > 0) {
-                        queue.push(std::move(buyOrder));
+                        queue.push(buyOrder);
                     }
                     
                     if (queue.empty()) {
@@ -236,38 +230,16 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
         // If order wasn't fully matched, add remaining to book
         if (newOrder->remainingAmount.value > 0) {
             if (newOrder->type == OrderType::BUY) {
-                buyOrders[newOrder->price].push(std::move(newOrder));
+                buyOrders[newOrder->price].push(newOrder);
             } else {
-                sellOrders[newOrder->price].push(std::move(newOrder));
+                sellOrders[newOrder->price].push(newOrder);
             }
             orderAddedToBook = true;
         }
 
         // Log order book state while holding the lock
         if (orderAddedToBook) {
-            std::cout << "\nOrder Book State:" << std::endl;
-            std::cout << "Buy Orders (highest first):" << std::endl;
-            for (const auto& [price, queue] : buyOrders) {
-                std::cout << "Price " << price.value << ": " << queue.size() << " orders" << std::endl;
-                if (!queue.empty()) {
-                    const auto& order = queue.front();
-                    std::cout << "  - OrderId: " << order->orderId.value 
-                             << " Amount: " << order->remainingAmount.value
-                             << " Client: " << order->client->getName() << std::endl;
-                }
-            }
-            
-            std::cout << "Sell Orders (lowest first):" << std::endl;
-            for (const auto& [price, queue] : sellOrders) {
-                std::cout << "Price " << price.value << ": " << queue.size() << " orders" << std::endl;
-                if (!queue.empty()) {
-                    const auto& order = queue.front();
-                    std::cout << "  - OrderId: " << order->orderId.value 
-                             << " Amount: " << order->remainingAmount.value
-                             << " Client: " << order->client->getName() << std::endl;
-                }
-            }
-            std::cout << std::endl;
+            logOrderBookState();
         }
     }
 
@@ -283,7 +255,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
         buyOrder->client->onOrderTraded(buyOrder->orderId, price, amount);
         sellOrder->client->onOrderTraded(sellOrder->orderId, price, amount);
         
-        totalTradesExecuted++; // Use member variable
+        totalTradesExecuted++;
     }
 }
 
