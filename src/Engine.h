@@ -56,8 +56,8 @@ private:
     std::map<Price, std::queue<std::unique_ptr<Order>>, std::greater<Price>> buyOrders;
     std::map<Price, std::queue<std::unique_ptr<Order>>> sellOrders;
     
-    // Change map to store raw pointers since we manage lifetime separately
-    std::unordered_map<OrderId, Order*> orders;
+    // Use shared_ptr for order tracking
+    std::unordered_map<OrderId, std::shared_ptr<Order>> orders;
     
     // Mutex for thread safety
     std::mutex orderBookMutex;

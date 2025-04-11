@@ -32,7 +32,7 @@ Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::sha
     // Create new order outside the lock
     OrderId orderId = nextOrderId.load();
     nextOrderId.store(OrderId(orderId.value + 1));
-    auto order = std::make_unique<Order>(orderId, type, price, amount, client);
+    auto order = std::make_shared<Order>(orderId, type, price, amount, client);
 
     auto start = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
@@ -47,11 +47,11 @@ Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::sha
     // Store order in lookup map before matching
     {
         std::lock_guard<std::mutex> lock(orderBookMutex);
-        orders[orderId] = order.get();
+        orders[orderId] = order;
     }
 
     // Try to match orders first
-    matchOrders(std::move(order));
+    matchOrders(std::unique_ptr<Order>(new Order(*order)));
 
     return Response(ResponseStatus::SUCCESS, "Order placed successfully", orderId);
 }
@@ -78,7 +78,7 @@ Response Engine::cancelOrder(OrderId orderId, std::shared_ptr<Client> client) {
         return Response(ResponseStatus::ORDER_NOT_FOUND, "Order not found");
     }
     
-    Order* order = it->second;
+    std::shared_ptr<Order> order = it->second;
     if (order->client != client) {
         std::cout << "Order does not belong to client" << std::endl;
         return Response(ResponseStatus::INVALID_ORDER, "Order does not belong to client");
