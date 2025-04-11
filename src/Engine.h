@@ -31,6 +31,10 @@ struct Response {
 
 class Engine {
 public:
+    // Constants for order ID limits
+    static constexpr OrderId MAX_ORDER_ID = OrderId(std::numeric_limits<int>::max());
+    static constexpr OrderId MIN_ORDER_ID = OrderId(0);
+    
     // Constructor with dependency injection
     Engine();
     
@@ -51,7 +55,7 @@ public:
     ~Engine();
     
 private:
-    // Order ID generator
+    // Order ID generator with proper atomic operations
     std::atomic<OrderId> nextOrderId;
     
     // Total trades executed counter
@@ -72,4 +76,7 @@ private:
     
     // Helper method to log order book state
     void logOrderBookState();
+    
+    // Helper method to generate next order ID
+    OrderId generateNextOrderId();
 }; 

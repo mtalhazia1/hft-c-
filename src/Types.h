@@ -9,8 +9,8 @@ enum class OrderType {
 // Strong types for better type safety
 struct OrderId {
     int32_t value;
-    explicit OrderId(int32_t v) : value(v) {}
-    operator int32_t() const { return value; }
+    constexpr explicit OrderId(int32_t v) : value(v) {}
+    constexpr operator int32_t() const { return value; }
 };
 
 struct Price {

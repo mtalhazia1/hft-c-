@@ -9,6 +9,7 @@
 #include <atomic>
 #include <unordered_map>
 #include <chrono>
+#include <limits>
 
 // Remove extern declaration
 // extern std::atomic<int> totalTradesExecuted;
@@ -21,6 +22,23 @@ Engine::Engine() : nextOrderId(OrderId(0)), totalTradesExecuted(0) {
     std::cout << "Trading Engine started" << std::endl;
 }
 
+OrderId Engine::generateNextOrderId() {
+    OrderId currentId = nextOrderId.load(std::memory_order_acquire);
+    OrderId newId = OrderId(currentId.value + 1);
+    
+    do {
+        // Check for overflow
+        if (newId.value <= currentId.value) {
+            std::cerr << "Warning: Order ID overflow detected, resetting to " << MIN_ORDER_ID.value << std::endl;
+            newId = MIN_ORDER_ID;
+        }
+    } while (!nextOrderId.compare_exchange_weak(currentId, newId, 
+                                              std::memory_order_release,
+                                              std::memory_order_relaxed));
+    
+    return currentId;
+}
+
 Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::shared_ptr<Client> client) {
     if (!client) {
         return Response(ResponseStatus::INVALID_ORDER, "Invalid client");
@@ -30,9 +48,8 @@ Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::sha
         return Response(ResponseStatus::INVALID_ORDER, "Invalid amount or price");
     }
 
-    // Create new order outside the lock
-    OrderId orderId = nextOrderId.load();
-    nextOrderId.store(OrderId(orderId.value + 1));
+    // Generate new order ID using atomic operations
+    OrderId orderId = generateNextOrderId();
     auto order = std::make_shared<Order>(orderId, type, price, amount, client);
 
     auto start = std::chrono::high_resolution_clock::now();
