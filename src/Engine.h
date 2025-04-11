@@ -12,8 +12,6 @@
 
 class Client;
 
-extern std::atomic<int> totalTradesExecuted;
-
 enum class ResponseStatus {
     SUCCESS,
     INVALID_ORDER,
@@ -45,12 +43,18 @@ public:
     // Cancel an order
     Response cancelOrder(OrderId orderId, std::shared_ptr<Client> client);
     
+    // Get total trades executed
+    int getTotalTradesExecuted() const { return totalTradesExecuted.load(); }
+    
     // Destructor
     ~Engine();
     
 private:
     // Order ID generator
     std::atomic<OrderId> nextOrderId;
+    
+    // Total trades executed counter
+    std::atomic<int> totalTradesExecuted;
     
     // Order books with smart pointers
     std::map<Price, std::queue<std::unique_ptr<Order>>, std::greater<Price>> buyOrders;

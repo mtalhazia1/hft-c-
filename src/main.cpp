@@ -10,7 +10,6 @@
 #include <iomanip>
 
 std::atomic<int> totalOrdersProcessed(0);
-std::atomic<int> totalTradesExecuted(0);
 std::atomic<int> totalOrdersCanceled(0);
 
 /*
@@ -57,10 +56,10 @@ make
 ```
 */
 
-void printTestSummary(int expectedOrders) {
+void printTestSummary(Engine& engine, int expectedOrders) {
     std::cout << "\n=== Test Summary ===" << std::endl;
     std::cout << "Total orders processed: " << totalOrdersProcessed << "/" << expectedOrders << std::endl;
-    std::cout << "Total trades executed: " << totalTradesExecuted << std::endl;
+    std::cout << "Total trades executed: " << engine.getTotalTradesExecuted() << std::endl;
     std::cout << "Total orders canceled: " << totalOrdersCanceled << std::endl;
 }
 
@@ -124,7 +123,13 @@ int main() {
 
     std::cout << "\n=== Test Completed ===" << std::endl;
     std::cout << "Duration: " << duration.count() << "ms" << std::endl;
-    printTestSummary(ordersPerClient * 2);
+    printTestSummary(engine, ordersPerClient * 2);
+
+    // Print final statistics
+    std::cout << "\n=== Test Summary ===" << std::endl;
+    std::cout << "Total orders processed: " << totalOrdersProcessed << "/" << totalOrdersProcessed << std::endl;
+    std::cout << "Total trades executed: " << engine.getTotalTradesExecuted() << std::endl;
+    std::cout << "Total orders canceled: " << totalOrdersCanceled << std::endl;
 
     return 0;
 } 

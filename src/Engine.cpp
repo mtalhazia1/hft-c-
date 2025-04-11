@@ -10,13 +10,14 @@
 #include <unordered_map>
 #include <chrono>
 
-extern std::atomic<int> totalTradesExecuted;
+// Remove extern declaration
+// extern std::atomic<int> totalTradesExecuted;
 
 // Remove singleton instance
 // std::unique_ptr<Engine> Engine::instance = nullptr;
 // std::mutex Engine::instanceMutex;
 
-Engine::Engine() : nextOrderId(OrderId(0)) {
+Engine::Engine() : nextOrderId(OrderId(0)), totalTradesExecuted(0) {
     std::cout << "Trading Engine started" << std::endl;
 }
 
@@ -282,7 +283,7 @@ void Engine::matchOrders(std::unique_ptr<Order> newOrder) {
         buyOrder->client->onOrderTraded(buyOrder->orderId, price, amount);
         sellOrder->client->onOrderTraded(sellOrder->orderId, price, amount);
         
-        totalTradesExecuted++; // Track trade execution
+        totalTradesExecuted++; // Use member variable
     }
 }
 
