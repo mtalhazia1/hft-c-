@@ -31,6 +31,7 @@ struct Response {
 
 class Engine {
 public:
+    // Constructor with dependency injection
     Engine();
     
     // Delete copy constructor and assignment operator
@@ -68,9 +69,6 @@ private:
     
     // Helper method to match orders
     void matchOrders(std::unique_ptr<Order> newOrder);
-    
-    // Helper method to get the instance
-    static Engine& getInstance();
     
     // Helper method to log order book state
     void logOrderBookState();
