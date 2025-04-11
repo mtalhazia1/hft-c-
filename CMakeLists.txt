@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
-project(HelloWorld)
+project(MatchingEngine)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(HelloWorld src/main.cpp) 
+add_executable(MatchingEngine src/main.cpp) 
