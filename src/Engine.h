@@ -68,8 +68,10 @@ private:
     // Use shared_ptr for order tracking
     std::unordered_map<OrderId, std::shared_ptr<Order>> orders;
     
-    // Mutex for thread safety
-    std::mutex orderBookMutex;
+    // Mutexes for thread safety
+    std::mutex orderMapMutex;  // For orders lookup map
+    std::mutex buyOrdersMutex; // For buy order book
+    std::mutex sellOrdersMutex; // For sell order book
     
     // Helper method to match orders
     void matchOrders(std::shared_ptr<Order> newOrder);
@@ -79,4 +81,11 @@ private:
     
     // Helper method to generate next order ID
     OrderId generateNextOrderId();
+    
+    // Helper methods for order book operations
+    bool removeOrderFromBook(std::shared_ptr<Order> order);
+    void addOrderToBook(std::shared_ptr<Order> order);
+    
+    // Helper method to execute a trade between two orders
+    void executeTrade(std::shared_ptr<Order> buyOrder, std::shared_ptr<Order> sellOrder, Amount tradeAmount);
 }; 

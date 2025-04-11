@@ -39,6 +39,62 @@ OrderId Engine::generateNextOrderId() {
     return currentId;
 }
 
+// Helper method to add order to the appropriate order book
+void Engine::addOrderToBook(std::shared_ptr<Order> order) {
+    if (order->type == OrderType::BUY) {
+        std::lock_guard<std::mutex> lock(buyOrdersMutex);
+        buyOrders[order->price].push(order);
+    } else {
+        std::lock_guard<std::mutex> lock(sellOrdersMutex);
+        sellOrders[order->price].push(order);
+    }
+}
+
+// Helper method to remove order from the appropriate order book
+bool Engine::removeOrderFromBook(std::shared_ptr<Order> order) {
+    bool found = false;
+    
+    if (order->type == OrderType::BUY) {
+        std::lock_guard<std::mutex> lock(buyOrdersMutex);
+        auto& queue = buyOrders[order->price];
+        size_t size = queue.size();
+        
+        for (size_t i = 0; i < size; ++i) {
+            auto front = queue.front();
+            queue.pop();
+            if (front->orderId != order->orderId) {
+                queue.push(front);
+            } else {
+                found = true;
+            }
+        }
+        
+        if (queue.empty()) {
+            buyOrders.erase(order->price);
+        }
+    } else {
+        std::lock_guard<std::mutex> lock(sellOrdersMutex);
+        auto& queue = sellOrders[order->price];
+        size_t size = queue.size();
+        
+        for (size_t i = 0; i < size; ++i) {
+            auto front = queue.front();
+            queue.pop();
+            if (front->orderId != order->orderId) {
+                queue.push(front);
+            } else {
+                found = true;
+            }
+        }
+        
+        if (queue.empty()) {
+            sellOrders.erase(order->price);
+        }
+    }
+    
+    return found;
+}
+
 Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::shared_ptr<Client> client) {
     if (!client) {
         return Response(ResponseStatus::INVALID_ORDER, "Invalid client");
@@ -62,9 +118,9 @@ Response Engine::placeOrder(OrderType type, Price price, Amount amount, std::sha
               << " Price: " << price.value 
               << " Amount: " << amount.value << std::endl;
 
-    // Store order in lookup map before matching
+    // Store order in lookup map
     {
-        std::lock_guard<std::mutex> lock(orderBookMutex);
+        std::lock_guard<std::mutex> lock(orderMapMutex);
         orders[orderId] = order;
     }
 
@@ -81,249 +137,201 @@ Response Engine::cancelOrder(OrderId orderId, std::shared_ptr<Client> client) {
         return Response(ResponseStatus::INVALID_ORDER, "Invalid client");
     }
     
-    std::lock_guard<std::mutex> lock(orderBookMutex);
-    
-    auto now = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - start);
-    
-    std::cout << "\n[Time: " << duration.count() << "μs] Cancel request received for OrderId: " 
-              << orderId.value << std::endl;
-    
-    // Find order in lookup map
-    auto it = orders.find(orderId);
-    if (it == orders.end()) {
-        std::cout << "Order not found" << std::endl;
-        return Response(ResponseStatus::ORDER_NOT_FOUND, "Order not found");
+    // First find the order in the lookup map
+    std::shared_ptr<Order> order;
+    {
+        std::lock_guard<std::mutex> lock(orderMapMutex);
+        auto it = orders.find(orderId);
+        if (it == orders.end()) {
+            std::cout << "Order not found" << std::endl;
+            return Response(ResponseStatus::ORDER_NOT_FOUND, "Order not found");
+        }
+        order = it->second;
     }
     
-    std::shared_ptr<Order> order = it->second;
     if (order->client != client) {
         std::cout << "Order does not belong to client" << std::endl;
         return Response(ResponseStatus::INVALID_ORDER, "Order does not belong to client");
     }
     
     // Remove from order book
-    if (order->type == OrderType::BUY) {
-        auto& queue = buyOrders[order->price];
-        bool found = false;
-        size_t size = queue.size();
-        
-        // Find and remove the order
-        for (size_t i = 0; i < size; ++i) {
-            auto front = std::move(queue.front());
-            queue.pop();
-            if (front->orderId != orderId) {
-                queue.push(std::move(front));
-            } else {
-                found = true;
-            }
+    bool found = removeOrderFromBook(order);
+    
+    if (found) {
+        // Remove from lookup map
+        {
+            std::lock_guard<std::mutex> lock(orderMapMutex);
+            orders.erase(orderId);
         }
         
-        // Remove price level if empty
-        if (queue.empty()) {
-            buyOrders.erase(order->price);
-        }
-    } else {
-        auto& queue = sellOrders[order->price];
-        bool found = false;
-        size_t size = queue.size();
+        auto now = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - start);
         
-        // Find and remove the order
-        for (size_t i = 0; i < size; ++i) {
-            auto front = std::move(queue.front());
-            queue.pop();
-            if (front->orderId != orderId) {
-                queue.push(std::move(front));
-            } else {
-                found = true;
-            }
-        }
+        std::cout << "\n[Time: " << duration.count() << "μs] Cancel request received for OrderId: " 
+                  << orderId.value << std::endl;
         
-        // Remove price level if empty
-        if (queue.empty()) {
-            sellOrders.erase(order->price);
-        }
+        std::cout << "Order cancelled. Current state:" << std::endl;
+        logOrderBookState();
+        
+        return Response(ResponseStatus::SUCCESS, "Order cancelled successfully");
     }
     
-    // Remove from lookup map
-    orders.erase(orderId);
-    
-    std::cout << "Order cancelled. Current state:" << std::endl;
-    logOrderBookState();
-    
-    return Response(ResponseStatus::SUCCESS, "Order cancelled successfully");
+    return Response(ResponseStatus::ORDER_NOT_FOUND, "Order not found in order book");
 }
 
 void Engine::matchOrders(std::shared_ptr<Order> newOrder) {
-    if (!newOrder) return;
-
-    std::cout << "\nAttempting to match order: " << newOrder->orderId.value << std::endl;
-
-    // Create a vector to store trades that need to be executed
-    std::vector<std::tuple<std::shared_ptr<Order>, std::shared_ptr<Order>, Price, Amount>> tradesToExecute;
     bool orderAddedToBook = false;
-
-    {
-        std::lock_guard<std::mutex> lock(orderBookMutex);
-
+    
+    try {
         if (newOrder->type == OrderType::BUY) {
-            // Try to match with sell orders
-            auto it = sellOrders.begin();
-            while (it != sellOrders.end() && newOrder->remainingAmount.value > 0) {
-                if (newOrder->price.value < it->first.value) {
-                    std::cout << "No matching sell orders at acceptable price" << std::endl;
-                    break;
+            // For buy orders, look at sell orders
+            std::lock_guard<std::mutex> sellLock(sellOrdersMutex);
+            for (auto it = sellOrders.begin(); it != sellOrders.end() && newOrder->remainingAmount.value > 0;) {
+                auto& [price, queue] = *it;
+                
+                if (price.value > newOrder->price.value) {
+                    break; // No more matching prices
                 }
-
-                auto& queue = it->second;
+                
                 while (!queue.empty() && newOrder->remainingAmount.value > 0) {
                     auto sellOrder = queue.front();
                     queue.pop();
                     
-                    // Calculate trade amount
-                    Amount tradeAmount(std::min(newOrder->remainingAmount.value, 
-                                             sellOrder->remainingAmount.value));
-                    Price tradePrice = sellOrder->price;
+                    Amount tradeAmount = std::min(newOrder->remainingAmount, sellOrder->remainingAmount);
                     
-                    // Store trade details for later execution
-                    tradesToExecute.emplace_back(newOrder, sellOrder, tradePrice, tradeAmount);
+                    // Execute trade
+                    executeTrade(newOrder, sellOrder, tradeAmount);
                     
-                    // Update remaining amounts
-                    newOrder->remainingAmount.value -= tradeAmount.value;
-                    sellOrder->remainingAmount.value -= tradeAmount.value;
-                    
-                    // If sell order still has remaining amount, push it back
                     if (sellOrder->remainingAmount.value > 0) {
                         queue.push(sellOrder);
-                    }
-                    
-                    if (queue.empty()) {
-                        it = sellOrders.erase(it);
                         break;
                     }
                 }
-                if (it != sellOrders.end()) ++it;
+                
+                if (queue.empty()) {
+                    it = sellOrders.erase(it);
+                } else {
+                    ++it;
+                }
             }
         } else {
-            // Try to match with buy orders
-            auto it = buyOrders.begin();
-            while (it != buyOrders.end() && newOrder->remainingAmount.value > 0) {
-                if (newOrder->price.value > it->first.value) {
-                    std::cout << "No matching buy orders at acceptable price" << std::endl;
-                    break;
+            // For sell orders, look at buy orders
+            std::lock_guard<std::mutex> buyLock(buyOrdersMutex);
+            for (auto it = buyOrders.begin(); it != buyOrders.end() && newOrder->remainingAmount.value > 0;) {
+                auto& [price, queue] = *it;
+                
+                if (price.value < newOrder->price.value) {
+                    break; // No more matching prices
                 }
                 
-                auto& queue = it->second;
                 while (!queue.empty() && newOrder->remainingAmount.value > 0) {
                     auto buyOrder = queue.front();
                     queue.pop();
                     
-                    // Calculate trade amount
-                    Amount tradeAmount(std::min(newOrder->remainingAmount.value, 
-                                             buyOrder->remainingAmount.value));
-                    Price tradePrice = buyOrder->price;
+                    Amount tradeAmount = std::min(newOrder->remainingAmount, buyOrder->remainingAmount);
                     
-                    // Store trade details for later execution
-                    tradesToExecute.emplace_back(buyOrder, newOrder, tradePrice, tradeAmount);
+                    // Execute trade
+                    executeTrade(buyOrder, newOrder, tradeAmount);
                     
-                    // Update remaining amounts
-                    newOrder->remainingAmount.value -= tradeAmount.value;
-                    buyOrder->remainingAmount.value -= tradeAmount.value;
-                    
-                    // If buy order still has remaining amount, push it back
                     if (buyOrder->remainingAmount.value > 0) {
                         queue.push(buyOrder);
-                    }
-                    
-                    if (queue.empty()) {
-                        it = buyOrders.erase(it);
                         break;
                     }
                 }
-                if (it != buyOrders.end()) ++it;
+                
+                if (queue.empty()) {
+                    it = buyOrders.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
         
         // If order wasn't fully matched, add remaining to book
         if (newOrder->remainingAmount.value > 0) {
-            if (newOrder->type == OrderType::BUY) {
-                buyOrders[newOrder->price].push(newOrder);
-            } else {
-                sellOrders[newOrder->price].push(newOrder);
-            }
+            addOrderToBook(newOrder);
             orderAddedToBook = true;
         }
-
-        // Log order book state while holding the lock
-        if (orderAddedToBook) {
-            logOrderBookState();
+    } catch (const std::exception& e) {
+        std::cerr << "Error in matchOrders: " << e.what() << std::endl;
+        if (!orderAddedToBook && newOrder->remainingAmount.value > 0) {
+            addOrderToBook(newOrder);
         }
     }
+}
 
-    // Execute trades and notify clients outside the lock
-    for (const auto& [buyOrder, sellOrder, price, amount] : tradesToExecute) {
-        std::cout << "Match found! Trade executed:" << std::endl;
-        std::cout << "Buy OrderId: " << buyOrder->orderId.value 
-                 << " Sell OrderId: " << sellOrder->orderId.value
-                 << " Price: " << price.value
-                 << " Amount: " << amount.value << std::endl;
-        
-        // Notify clients about the trade
-        buyOrder->client->onOrderTraded(buyOrder->orderId, price, amount);
-        sellOrder->client->onOrderTraded(sellOrder->orderId, price, amount);
-        
-        totalTradesExecuted++;
-    }
+void Engine::executeTrade(std::shared_ptr<Order> buyOrder, std::shared_ptr<Order> sellOrder, Amount tradeAmount) {
+    // Calculate trade price (use the price from the order that was in the book)
+    Price tradePrice = (buyOrder->type == OrderType::BUY) ? sellOrder->price : buyOrder->price;
+    
+    // Update remaining amounts
+    buyOrder->remainingAmount.value -= tradeAmount.value;
+    sellOrder->remainingAmount.value -= tradeAmount.value;
+    
+    // Notify clients about the trade
+    buyOrder->client->onOrderTraded(buyOrder->orderId, tradePrice, tradeAmount);
+    sellOrder->client->onOrderTraded(sellOrder->orderId, tradePrice, tradeAmount);
+    
+    // Increment total trades counter
+    totalTradesExecuted++;
+    
+    std::cout << "Match found! Trade executed:" << std::endl;
+    std::cout << "Buy OrderId: " << buyOrder->orderId.value 
+              << " Sell OrderId: " << sellOrder->orderId.value
+              << " Price: " << tradePrice.value
+              << " Amount: " << tradeAmount.value << std::endl;
 }
 
 void Engine::logOrderBookState() {
-    std::cout << "\nOrder Book State:" << std::endl;
+    std::cout << "\nCurrent Order Book State:" << std::endl;
+    std::cout << "------------------------" << std::endl;
     
-    std::cout << "Buy Orders (highest first):" << std::endl;
-    for (const auto& [price, queue] : buyOrders) {
-        std::cout << "Price " << price.value << ": " << queue.size() << " orders" << std::endl;
-        // Show details of each order at this price level
-        if (!queue.empty()) {
-            const auto& order = queue.front();
-            std::cout << "  - OrderId: " << order->orderId.value 
-                      << " Amount: " << order->remainingAmount.value
-                      << " Client: " << order->client->getName() << std::endl;
+    {
+        std::lock_guard<std::mutex> buyLock(buyOrdersMutex);
+        std::cout << "Buy Orders:" << std::endl;
+        for (const auto& [price, queue] : buyOrders) {
+            std::cout << "Price: " << price.value << " - Orders: " << queue.size() << std::endl;
         }
     }
     
-    std::cout << "Sell Orders (lowest first):" << std::endl;
-    for (const auto& [price, queue] : sellOrders) {
-        std::cout << "Price " << price.value << ": " << queue.size() << " orders" << std::endl;
-        // Show details of each order at this price level
-        if (!queue.empty()) {
-            const auto& order = queue.front();
-            std::cout << "  - OrderId: " << order->orderId.value 
-                      << " Amount: " << order->remainingAmount.value
-                      << " Client: " << order->client->getName() << std::endl;
+    {
+        std::lock_guard<std::mutex> sellLock(sellOrdersMutex);
+        std::cout << "Sell Orders:" << std::endl;
+        for (const auto& [price, queue] : sellOrders) {
+            std::cout << "Price: " << price.value << " - Orders: " << queue.size() << std::endl;
         }
     }
-    std::cout << std::endl;
+    
+    std::cout << "------------------------" << std::endl;
 }
 
 Engine::~Engine() {
-    std::lock_guard<std::mutex> lock(orderBookMutex);
     std::cout << "Trading Engine shutting down" << std::endl;
     
     // Clear all orders from the order books
-    for (auto& [price, queue] : buyOrders) {
-        while (!queue.empty()) {
-            queue.pop();
+    {
+        std::lock_guard<std::mutex> buyLock(buyOrdersMutex);
+        for (auto& [price, queue] : buyOrders) {
+            while (!queue.empty()) {
+                queue.pop();
+            }
         }
+        buyOrders.clear();
     }
-    buyOrders.clear();
     
-    for (auto& [price, queue] : sellOrders) {
-        while (!queue.empty()) {
-            queue.pop();
+    {
+        std::lock_guard<std::mutex> sellLock(sellOrdersMutex);
+        for (auto& [price, queue] : sellOrders) {
+            while (!queue.empty()) {
+                queue.pop();
+            }
         }
+        sellOrders.clear();
     }
-    sellOrders.clear();
     
     // Clear the lookup map
-    orders.clear();
+    {
+        std::lock_guard<std::mutex> mapLock(orderMapMutex);
+        orders.clear();
+    }
 } 
